@@ -1,5 +1,12 @@
 // ========================================================================
 // ระบบพิมพ์ใบปะหน้าพัสดุ — รองรับวางออเดอร์หลายรายการพร้อมกัน + Order ID/QR
+// (ฉบับแก้ไข: ตัดส่วน "รายการสินค้า + ส่ง XX" ออกก่อนแยกชื่อ,
+//  รู้จักเบอร์โทรที่เขียนในวงเล็บ [ ], และรู้จักคำย่อ "ม." = หมู่)
+//
+// >>> รอบนี้แก้เพิ่ม 3 จุด (ดูคอมเมนต์ "FIX:" ในโค้ด) <<<
+//   1) บรรทัดค่าส่งรองรับคำว่า "วิน" ไม่ใช่แค่ "ส่ง"
+//   2) รองรับเบอร์โทรที่เขียนในวงเล็บกลม ( ) ไม่ใช่แค่วงเล็บเหลี่ยม [ ]
+//   3) รองรับคำนำหน้าเบอร์ "เบอร์" เดี่ยว ๆ ไม่ใช่แค่ "เบอร์โทร"
 // ========================================================================
 
 let orderList = [];      // { id, data } ทั้งหมดที่จะพิมพ์ (สะสมได้เรื่อย ๆ)
@@ -10,9 +17,24 @@ const PHONE_RE = /0[\d-]{8,10}\d/; // จับเบอร์โทรแบบ
 // คำที่บ่งชี้ว่าเป็นชื่อธุรกิจ/ร้านค้า ใช้แยกออกจากชื่อคนให้เป็นคนละบรรทัด
 const BUSINESS_KEYWORD_RE = /(ร้าน|บริษัท|ห้างหุ้นส่วน|หจก\.?|บจก\.?)/;
 // เบอร์โทร: ต้องไม่ติดกับตัวเลขชุดอื่น (กันไปกินเลขรหัสไปรษณีย์/ราคา)
-const FREEFORM_PHONE_RE = /(?:เบอร์โทร|โทร\.?|T\.?|Tel\.?)?\s*:?\s*(?<!\d)(0[\d\s-]{8,10}\d)(?!\d)/i;
+// FIX (#3): เพิ่ม "เบอร์" เดี่ยว ๆ เข้าไปในคำนำหน้าที่รู้จัก (เดิมรู้จักแค่ "เบอร์โทร" เต็ม ๆ)
+const FREEFORM_PHONE_RE = /(?:เบอร์โทร|เบอร์|โทร\.?|T\.?|Tel\.?)?\s*:?\s*(?<!\d)(0[\d\s-]{8,10}\d)(?!\d)/i;
 // คำที่บ่งชี้จุดเริ่มที่อยู่หน่วยงาน/ราชการ/ทหาร ซึ่งมักไม่มีตัวเลขนำหน้าเลย
-const INSTITUTION_KEYWORD_RE = /(บ้านพัก|ค่ายทหาร|ค่าย|กรม|กองพล|กองร้อย|กองบิน|กอง(?!ทัพ)|สภ\.|สถานีตำรวจ|โรงพัก|ตชด\.|เรือนจำ|ทัณฑสถาน|มณฑลทหารบก|หน่วย|ป้อมตำรวจ|ฐานทัพ)/;
+const INSTITUTION_KEYWORD_RE = /(บ้านพัก|มหาวิทยาลัย|วิทยาลัย|สถาบัน|โรงเรียน|ค่ายทหาร|ค่าย|กรม|กองพล|กองร้อย|กองบิน|กอง(?!ทัพ)|สภ\.|สถานีตำรวจ|โรงพัก|ตชด\.|เรือนจำ|ทัณฑสถาน|มณฑลทหารบก|หน่วย|ป้อมตำรวจ|ฐานทัพ)/;
+// จุดเริ่มของที่อยู่
+// - เดิมจับได้แค่กรณีที่อยู่ขึ้นต้นด้วยตัวเลข (เลขที่/หมู่/เลขบ้าน) เท่านั้น
+// - เพิ่มคำที่ใช้ขึ้นต้นที่อยู่แบบไม่มีตัวเลขนำหน้าเลยด้วย เช่น "โครงการ...", "หมู่บ้าน...",
+//   "คอนโด...", "เดอะ..." ไม่งั้นที่อยู่แบบนี้จะไม่ถูกตัดออกจากชื่อเลย
+// - ยังคง "ม." (คำย่อของ "หมู่") ไว้ในกลุ่มเลขบ้าน เพื่อจับเคสแบบ "54 ม.4 ต.จันทนิมิต..." ให้แม่นยำ
+//   โดยไม่ต้องพึ่ง fallback หาตัวเลขตัวแรกเฉย ๆ (ซึ่งเสี่ยงพลาดถ้าในชื่อมีตัวเลขปนอยู่ก่อน)
+const ADDRESS_START_RE = /(?:มบ\.?|เดอะ|The|โครงการ|หมู่บ้าน|บ้านพัก|คอนโด(?:มิเนียม)?|อาคาร|ตึก|บ้านเลขที่|เลขที่|หมู่ที่|หมู่\s+|\b\d{1,3}\/\d+|\b\d{1,4}\s+(?:ซอย|ถนน|หมู่|ม\.|ต\.|อ\.|จ\.))/i;
+// บรรทัดค่าส่ง เช่น "ส่ง 50" / "ส่ง60" / "วิน 50" / "วิน60"
+// — ใช้ตัดส่วน "รายการสินค้า" ทิ้งก่อนถึงข้อมูลลูกค้า
+// ต้องขึ้นต้นบรรทัดจริง ๆ (อนุญาตช่องว่างนำหน้า) กันไปชนคำว่า "จัดส่ง"
+// FIX (#1): เพิ่ม "วิน" (ค่าส่งวินมอเตอร์ไซค์) เข้าไปด้วย เพราะเดิมรู้จักแค่ "ส่ง" อย่างเดียว
+//           ทำให้ตอนที่คนพิมพ์ใช้คำว่า "วิน 60" ระบบตัดรายการสินค้าออกไม่ได้เลย
+//           แล้วเอาทั้งก้อน (รวมชื่อสินค้า/emoji) ไปพยายามแยกเป็นชื่อ-ที่อยู่ลูกค้า จึงมั่ว
+const SHIPPING_FEE_LINE_RE = /^[ \t]*(?:ส่ง|วิน)[ \t]*\d+.*$/m;
 
 // ------------------------------------------------------------------------
 // Order ID
@@ -53,8 +75,14 @@ function normalizePhoneDigits(rawPhone) {
     : digits;
 }
 
+// เช็คว่าข้อความเป็นเบอร์โทรไทยไหม (ใช้ตอนตัดสินใจว่าของใน ( ) / [ ] คือเบอร์หรือโน้ต)
+function looksLikePhoneNumber(text) {
+  const digits = text.replace(/[^\d]/g, "");
+  return /^0\d{8,9}$/.test(digits);
+}
+
 // ตัดคำนำหน้าชื่อทุกแบบทิ้ง แล้วขึ้นต้นด้วย "คุณ" ให้เหมือนกันหมดทุกคน
-const TITLE_RE = /^(นางสาว|นาย|นาง|น\.ส\.|ดร\.|นพ\.|พญ\.|ด\.ช\.|ด\.ญ\.|คุณหญิง|คุณ|Mrs\.?|Mr\.?|Miss\.?|Ms\.?|Dr\.?|K\.)\s*/i;
+const TITLE_RE = /^(นางสาว|นาย|นาง|น\.ส\.|ดร\.|นพ\.|พญ\.|ด\.ช\.|ด\.ญ\.|คุณหญิง|จัดส่ง|กรุณาจัดส่ง|ส่ง|คุณ|Mrs\.?|Mr\.?|Miss\.?|Ms\.?|Dr\.?|K\.)\s*/i;
 
 function normalizeNameTitle(name) {
   if (!name) return name;
@@ -83,26 +111,30 @@ function parseCustomerData(raw) {
   let note = "";
   const address = [];
 
-  lines.forEach(line => {
-    const phoneMatch = line.match(PHONE_RE);
-    if (phoneMatch && (line.replace(/[^0-9]/g, "").length >= 9)) {
-      phone = phoneMatch[0];
-      const rest = line.replace(PHONE_RE, "").replace(/โทร\.?:?/gi, "").trim();
-      if (rest && !name) {
-        const resolved = resolveNameAndBusiness(rest);
-        name = resolved.name;
-        business = resolved.business;
-      }
-    } else if (line.includes("[") && line.includes("]")) {
-      note = line.replace(/^\[|\]$/g, "");
-    } else if (!name) {
-      const resolved = resolveNameAndBusiness(line);
-      name = resolved.name;
-      business = resolved.business;
-    } else {
-      address.push(line);
-    }
-  });
+  lines.forEach((line, idx) => {
+  const phoneMatch = line.match(PHONE_RE);
+
+  if (phoneMatch) {
+    phone = phoneMatch[0];
+
+    // ❌ ไม่ใช้ line นี้เป็นชื่ออีกต่อไป
+    return;
+  }
+
+  if (line.includes("[") && line.includes("]")) {
+    note = line.replace(/^\[|\]$/g, "");
+    return;
+  }
+
+  if (!name) {
+    const resolved = resolveNameAndBusiness(line);
+    name = resolved.name;
+    business = resolved.business;
+    return;
+  }
+
+  address.push(line);
+});
 
   return { name, business, phone, note: note ? `[${note}]` : "", address };
 }
@@ -113,32 +145,59 @@ function parseCustomerData(raw) {
 function parseShippingBlob(raw) {
   let working = raw.replace(/\s+/g, " ").trim();
 
-  // ดึงโน้ตที่มี [ ] อยู่แล้วออกก่อน กันซ้อนวงเล็บ
+  let phone = "";
+
+  // FIX (#4): วงเล็บเหลี่ยม [ ] กับวงเล็บกลม ( ) มีความหมายคนละแบบ ต้องแยก logic กัน
+  // ห้ามใช้ regex เดียวจับทั้งคู่แล้วเอาแค่ "วงเล็บแรกที่เจอ" เพราะถ้าในบรรทัดมีวงเล็บ
+  // สองคู่ (เช่น "... (CEO) ... [ฝากไว้กับน้องๆที่ร้านได้เลยค่ะ] ...") วงเล็บที่เจอก่อน
+  // จะไปแย่งที่ของโน้ตตัวจริง แล้วโน้ตตัวจริงจะหายไปเลย
+
+  // 4a) วงเล็บเหลี่ยม [ ] = ช่องโน้ตที่ตั้งใจไว้จริง ๆ ดึงออกมาเป็นโน้ตเสมอ
+  //     (เผื่อไว้กรณีคนพิมพ์ดันใส่เบอร์โทรไว้ใน [ ] แทนโน้ต ก็ยังรองรับ)
   let bracketNote = "";
-  const bracketMatch = working.match(/\[([^\]]+)\]/);
-  if (bracketMatch) {
-    bracketNote = bracketMatch[1].trim();
+  const noteMatch = working.match(/\[([^\]]+)\]/);
+  if (noteMatch) {
+    const noteContent = noteMatch[1].trim();
+    if (looksLikePhoneNumber(noteContent)) {
+      phone = normalizePhoneDigits(noteContent);
+    } else {
+      bracketNote = noteContent;
+    }
     working = (
-      working.slice(0, bracketMatch.index) + " " +
-      working.slice(bracketMatch.index + bracketMatch[0].length)
+      working.slice(0, noteMatch.index) + " " +
+      working.slice(noteMatch.index + noteMatch[0].length)
     ).replace(/\s+/g, " ").trim();
   }
 
-  // ดึงเบอร์โทร (ไม่ว่าจะอยู่ตรงไหนของประโยค)
-  let phone = "";
-  const phoneMatch = working.match(FREEFORM_PHONE_RE);
-  if (phoneMatch) {
-    phone = normalizePhoneDigits(phoneMatch[1]);
-    working = (
-      working.slice(0, phoneMatch.index) + " " +
-      working.slice(phoneMatch.index + phoneMatch[0].length)
-    ).replace(/\s+/g, " ").trim();
+  // 4b) วงเล็บกลม ( ) = ดึงออกมา "เฉพาะ" กรณีข้างในเป็นเบอร์โทรจริง ๆ เท่านั้น เช่น "(0937718642)"
+  //     ถ้าข้างในเป็นข้อความอื่น เช่น "(CEO)" ให้ปล่อยผ่านไปเฉย ๆ อย่าดึงออกมาเป็นโน้ต
+  //     เดี๋ยวคำแบบ "(CEO)" จะติดไปกับชื่อ/ชื่อร้านตามธรรมชาติแทน ไม่หายไปไหน
+  if (!phone) {
+    const parenMatch = working.match(/\(([^)]+)\)/);
+    if (parenMatch && looksLikePhoneNumber(parenMatch[1])) {
+      phone = normalizePhoneDigits(parenMatch[1]);
+      working = (
+        working.slice(0, parenMatch.index) + " " +
+        working.slice(parenMatch.index + parenMatch[0].length)
+      ).replace(/\s+/g, " ").trim();
+    }
+  }
+
+  // ดึงเบอร์โทร (ไม่ว่าจะอยู่ตรงไหนของประโยค) — ข้ามถ้าได้เบอร์จากวงเล็บไปแล้ว
+  if (!phone) {
+    const phoneMatch = working.match(FREEFORM_PHONE_RE);
+    if (phoneMatch) {
+      phone = normalizePhoneDigits(phoneMatch[1]);
+      working = (
+        working.slice(0, phoneMatch.index) + " " +
+        working.slice(phoneMatch.index + phoneMatch[0].length)
+      ).replace(/\s+/g, " ").trim();
+    }
   }
 
   // หาตำแหน่งตัดชื่อ โดยมองหาคำที่บ่งบอกถึง "ที่อยู่" ชัดเจน (เช่น บ้านเลขที่, เลขที่, หมู่ ฯลฯ)
   let nameEndIdx = -1;
-  const addressStartRegex = /(?:มบ\.?|เดอะ|The|โครงการ|หมู่บ้าน|บ้านพัก|คอนโด(?:มิเนียม)?|อาคาร|ตึก|เลขที่|บ้านเลขที่|หมู่ที่|หมู่\s+|\b\d{1,3}\/\d+|\b\d{1,4}\s+(?:ซอย|ถนน|หมู่|ต\.|อ\.|จ\.))/i;
-  const matchAddrStart = working.search(addressStartRegex);
+  const matchAddrStart = working.search(ADDRESS_START_RE);
 
   if (matchAddrStart !== -1) {
     nameEndIdx = matchAddrStart;
@@ -202,6 +261,13 @@ function extractShippingBlob(block) {
   if (ttMatch) {
     const cutIdx = ttMatch.index + ttMatch[0].length;
     return block.slice(cutIdx).trim();
+  }
+
+  // ตัดส่วน "รายการสินค้า" ทิ้ง โดยหาบรรทัดค่าส่งแบบ "ส่ง <ตัวเลข>" หรือ "วิน <ตัวเลข>"
+  // แพทเทิร์นนี้ครอบคลุมข้อมูลแบบ: รายการสินค้า(หลายบรรทัด) -> ส่ง/วิน XX -> บรรทัดว่าง -> ข้อมูลลูกค้า
+  const shipFeeMatch = block.match(SHIPPING_FEE_LINE_RE);
+  if (shipFeeMatch) {
+    return block.slice(shipFeeMatch.index + shipFeeMatch[0].length).trim();
   }
 
   const totalMatches = [...block.matchAll(/รวม(?:ทั้งหมด|ท้ั้งหมด)?[\d\s+=,.]*/g)];
